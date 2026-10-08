@@ -110,6 +110,46 @@ test('parser errors preserve the JSON error contract', async (t) => {
   assert.deepEqual(await oversized.json(), { error: 'Request body is too large.' });
 });
 
+test('conflicting POST requests return 409 with the conflict detail and do not create a booking', async (t) => {
+  const request = await setup(t);
+  await request('/api/bookings', post(booking));
+  const response = await request('/api/bookings', post({ ...booking, startTime: '2030-06-12T09:30:00Z', endTime: '2030-06-12T10:30:00Z' }));
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), {
+    error: 'Room Cedar is already booked from 09:00 to 10:00, resulting in a conflict from 09:30 to 10:00.',
+    conflict: {
+      roomName: 'Cedar',
+      start: '2030-06-12T09:00:00.000Z',
+      end: '2030-06-12T10:00:00.000Z',
+      conflictStart: '2030-06-12T09:30:00.000Z',
+      conflictEnd: '2030-06-12T10:00:00.000Z',
+    },
+  });
+  const listed = await request('/api/bookings?roomId=cedar&date=2030-06-12');
+  assert.equal((await listed.json()).length, 1);
+});
+
+test('a booking starting exactly when another ends is accepted via the API', async (t) => {
+  const request = await setup(t);
+  await request('/api/bookings', post(booking));
+  const response = await request('/api/bookings', post({ ...booking, startTime: booking.endTime, endTime: '2030-06-12T11:00:00Z' }));
+  assert.equal(response.status, 201);
+});
+
+test('different rooms stay independently bookable for the same time range via the API', async (t) => {
+  const request = await setup(t);
+  await request('/api/bookings', post(booking));
+  const response = await request('/api/bookings', post({ ...booking, roomId: 'maple' }));
+  assert.equal(response.status, 201);
+});
+
+test('non-conflict error responses never include a conflict field', async (t) => {
+  const request = await setup(t);
+  const response = await request('/api/bookings', post({ ...booking, endTime: booking.startTime }));
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'End time must be after start time.' });
+});
+
 test('routes remain case-sensitive, exact, and limited to their supported methods', async (t) => {
   const request = await setup(t);
   assert.equal((await request('/api/Rooms')).status, 404);
